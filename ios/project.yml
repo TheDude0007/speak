@@ -1,0 +1,72 @@
+name: Speak
+options:
+  bundleIdPrefix: com.gemnisound
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: UV2M86W3KP
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
+targets:
+  Speak:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Shared
+      - path: ../Sources/SpeakCore
+      - path: ../Sources/Speak/SpeechEngine.swift
+      - path: ../Sources/Speak/SmartGrammar.swift
+      - path: ../Sources/Speak/Polisher.swift
+      - path: ../Sources/Speak/AudioCapture.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gemnisound.speak
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CODE_SIGN_ENTITLEMENTS: App/Speak.entitlements
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Speak
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortraitUpsideDown]
+        NSMicrophoneUsageDescription: Speak listens only while you're dictating, and transcribes on this device.
+        NSSpeechRecognitionUsageDescription: Speak uses Apple's on-device speech model. Audio never leaves this device.
+        UIBackgroundModes: [audio]
+        CFBundleURLTypes:
+          - CFBundleURLName: com.gemnisound.speak
+            CFBundleURLSchemes: [speak]
+    dependencies:
+      - target: SpeakKeyboard
+        embed: true
+
+  SpeakKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Keyboard
+      - path: Shared
+      - path: ../Sources/SpeakCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gemnisound.speak.keyboard
+        CODE_SIGN_ENTITLEMENTS: Keyboard/SpeakKeyboard.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+    info:
+      path: Keyboard/Info.plist
+      properties:
+        CFBundleDisplayName: Speak
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            RequestsOpenAccess: true

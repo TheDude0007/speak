@@ -8,3 +8,5 @@ desktop/build/
 desktop/*.spec
 .venv/
 models/
+ios/Speak.xcodeproj/xcuserdata/
+ios/build/
