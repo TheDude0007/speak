@@ -38,7 +38,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         SFSpeechRecognizer.requestAuthorization { _ in }
-        Task { await engine.prepare() }
+        reloadEngine()
 
         wireHotkey()
         if !Inserter.isTrusted {
@@ -122,10 +122,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let cleaned = TextCleaner(options: store.cleanerOptions()).clean(raw)
             guard !cleaned.isEmpty else { hud.hide(); return }
             var polished = cleaned
+            var polishedByClaude = false
             if store.aiPolish {
                 hud.show(.finishing, text: "Polishing…")
-                do { polished = try await Polisher.polish(cleaned, appName: app) }
-                catch { hud.pushText("AI polish skipped — using local text") }
+                do { polished = try await Polisher.polish(cleaned, appName: app); polishedByClaude = true }
+                catch { hud.pushText("AI polish skipped — using on-device grammar") }
+            }
+            if !polishedByClaude, store.smartGrammar, let fixed = await SmartGrammar.shared.correct(cleaned) {
+                polished = fixed
+            } else if !polishedByClaude, engine.aiPunctuation, let last = polished.last, !".!?…:;\"”)".contains(last) {
+                polished += "."   // dictation engine leaves the final sentence open
             }
             var out = polished
             if store.smartSpacing { out = SmartJoin.adapt(cleaned, after: Inserter.textBeforeCaret()) }
@@ -145,6 +151,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.cancel()
         setIcon(recording: false)
         hud.hide()
+    }
+
+    private var wantsAIPunctuation: Bool {
+        (store.smartGrammar && SmartGrammar.shared.isAvailable) || (store.aiPolish && Keychain.apiKey != nil)
+    }
+
+    private func reloadEngine() {
+        let ai = wantsAIPunctuation
+        if store.smartGrammar { SmartGrammar.shared.prewarm() }
+        Task { await engine.prepare(aiPunctuation: ai) }
     }
 
     // MARK: mic modes
@@ -212,6 +228,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(.separator())
 
+        let sg = item("Smart grammar & punctuation (on-device AI)", #selector(toggle(_:)), state: store.smartGrammar, obj: "smartGrammar")
+        if let why = SmartGrammar.shared.unavailableReason { sg.title += " — \(why)"; sg.isEnabled = false }
+        menu.addItem(sg)
         menu.addItem(item("Remove filler words (um, uh)", #selector(toggle(_:)), state: store.removeFillers, obj: "removeFillers"))
         menu.addItem(item("Smart spacing & capitals", #selector(toggle(_:)), state: store.smartSpacing, obj: "smartSpacing"))
         menu.addItem(item("Show live transcript", #selector(toggle(_:)), state: store.liveText, obj: "liveText"))
@@ -256,6 +275,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.set(v, forKey: key)
         if key == "liveText" { hud.model.showText = v }
         if key == "instantStart" { armInstantStart() }
+        if (key == "smartGrammar" || key == "aiPolish"), session == nil, wantsAIPunctuation != engine.aiPunctuation { reloadEngine() }
         if key == "aiPolish", v, Keychain.apiKey == nil { setAPIKey() }
     }
 
@@ -307,6 +327,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         Keychain.apiKey = key.isEmpty ? nil : key
         if key.isEmpty { store.aiPolish = false }
+        if session == nil, wantsAIPunctuation != engine.aiPunctuation { reloadEngine() }
         hud.flash(key.isEmpty ? "API key removed" : "API key saved to Keychain")
     }
 
@@ -325,7 +346,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 func runHeadless(_ path: String, realtime: Bool) async {
     let engine = SpeechEngine()
     let t0 = CACurrentMediaTime()
-    await engine.prepare()
+    await engine.prepare(aiPunctuation: SmartGrammar.shared.isAvailable)
     let tPrep = CACurrentMediaTime()
     guard engine.isReady, let session = engine.makeSession(vocabulary: Store.shared.dictionary().vocabulary) else {
         print("engine not ready: \(engine.state)"); exit(1)
@@ -355,6 +376,13 @@ func runHeadless(_ path: String, realtime: Bool) async {
         print("prepare: \(Int((tPrep - t0) * 1000)) ms   finalize after end-of-audio: \(Int((tDone - tEnd) * 1000)) ms")
         print("RAW:     \(raw)")
         print("CLEANED: \(cleaned)")
+        SmartGrammar.shared.prewarm()
+        let tG = CACurrentMediaTime()
+        if let fixed = await SmartGrammar.shared.correct(cleaned) {
+            print("GRAMMAR: \(fixed)   [\(Int((CACurrentMediaTime() - tG) * 1000)) ms]")
+        } else {
+            print("GRAMMAR: (no change / unavailable: \(SmartGrammar.shared.unavailableReason ?? "-"))")
+        }
         exit(0)
     } catch {
         print("error: \(error)"); exit(1)

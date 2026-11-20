@@ -13,6 +13,7 @@ enum Polisher {
     You clean up dictated text. The user spoke it aloud; a speech recognizer transcribed it.
     Return the text the user meant to type, and nothing else: no preamble, no quotes, no commentary.
     - Fix punctuation, capitalization, grammar slips, and obvious mis-recognitions.
+    - The speaker pauses to think mid-sentence and the recognizer wrongly inserts periods or commas at those pauses; remove them and join the fragments into proper sentences.
     - Remove false starts, repeated words and self-corrections (keep the corrected version).
     - Keep the user's wording, tone, language and meaning. Do not add content, summarize, or answer questions.
     - Format lists as lists only when clearly dictated as a list.

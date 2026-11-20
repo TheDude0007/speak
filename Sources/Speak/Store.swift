@@ -28,6 +28,7 @@ final class Store {
     var sounds: Bool { get { bool("sounds", default: true) } set { d.set(newValue, forKey: "sounds") } }
     var liveText: Bool { get { bool("liveText", default: true) } set { d.set(newValue, forKey: "liveText") } }
     var keepHistory: Bool { get { bool("keepHistory", default: true) } set { d.set(newValue, forKey: "keepHistory") } }
+    var smartGrammar: Bool { get { bool("smartGrammar", default: true) } set { d.set(newValue, forKey: "smartGrammar") } }
     var aiPolish: Bool { get { bool("aiPolish", default: false) } set { d.set(newValue, forKey: "aiPolish") } }
     var instantStart: Bool { get { bool("instantStart", default: false) } set { d.set(newValue, forKey: "instantStart") } }
 
@@ -42,8 +43,8 @@ final class Store {
         let fm = FileManager.default
         if !fm.fileExists(atPath: dictionaryURL.path) {
             let template = Dictionary(
-                vocabulary: ["GEMNIsound", "Speak"],
-                replacements: ["gemini sound": "GEMNIsound", "smiley face": "🙂"])
+                vocabulary: ["Speak"],
+                replacements: ["smiley face": "🙂"])
             let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
             try? enc.encode(template).write(to: dictionaryURL)
         }

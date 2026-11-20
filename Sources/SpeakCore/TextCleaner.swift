@@ -6,6 +6,7 @@ public struct TextCleaner: Sendable {
         public var removeFillers = true
         public var spokenCommands = true   // "new line", "new paragraph", "scratch that"
         public var replacements: [String: String] = [:] // case-insensitive phrase -> output
+        public var repairPauses = true     // rejoin sentences split at thinking pauses
         public init() {}
     }
 
@@ -20,7 +21,9 @@ public struct TextCleaner: Sendable {
         if options.removeFillers { s = removeFillers(s) }
         if !options.replacements.isEmpty { s = applyReplacements(s) }
         if options.spokenCommands { s = applyLineCommands(s) }
-        return tidy(s)
+        s = tidy(s)
+        if options.repairPauses { s = capitalizeSentences(PauseRepair.repair(s)) }
+        return s
     }
 
     // MARK: - Steps

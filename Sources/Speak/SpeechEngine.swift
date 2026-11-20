@@ -22,11 +22,20 @@ final class SpeechEngine {
 
     var isReady: Bool { if case .ready = state { return true } else { return false } }
 
+    /// Test hook: SPEAK_ENGINE=dictation | speech-plain | speech-volatile | speech-fast (default)
+    static let variant = ProcessInfo.processInfo.environment["SPEAK_ENGINE"] ?? "speech-fast"
+
     private func makeModule() -> any SpeechModule {
         if useSpeechTranscriber {
+            let reporting: Set<SpeechTranscriber.ReportingOption>
+            switch Self.variant {
+            case "speech-plain": reporting = []
+            case "speech-volatile": reporting = [.volatileResults]
+            default: reporting = [.volatileResults, .fastResults]
+            }
             return SpeechTranscriber(locale: locale,
                                      transcriptionOptions: [],
-                                     reportingOptions: [.volatileResults, .fastResults],
+                                     reportingOptions: reporting,
                                      attributeOptions: [])
         }
         return DictationTranscriber(locale: locale,
@@ -38,9 +47,15 @@ final class SpeechEngine {
 
     static let options = SpeechAnalyzer.Options(priority: .userInitiated, modelRetention: .processLifetime)
 
-    func prepare(preferred: Locale = .current) async {
+    /// `aiPunctuation`: an AI pass (Apple Intelligence or Claude) will punctuate afterwards.
+    /// Then the dictation-tuned engine is used: it never ends sentences at thinking pauses.
+    /// Without AI, SpeechTranscriber's own punctuation + PauseRepair is the better result.
+    private(set) var aiPunctuation = false
+    func prepare(preferred: Locale = .current, aiPunctuation: Bool = false) async {
         set(.preparing("Checking speech model…"))
-        useSpeechTranscriber = SpeechTranscriber.isAvailable
+        self.aiPunctuation = aiPunctuation
+        let forced = ProcessInfo.processInfo.environment["SPEAK_ENGINE"]
+        useSpeechTranscriber = SpeechTranscriber.isAvailable && (forced.map { $0 != "dictation" } ?? !aiPunctuation)
         let resolved: Locale?
         if useSpeechTranscriber {
             resolved = await SpeechTranscriber.supportedLocale(equivalentTo: preferred)
@@ -127,7 +142,12 @@ final class DictationSession {
                     if let t = module as? SpeechTranscriber {
                         for try await r in t.results { cont.yield((String(r.text.characters), r.isFinal)) }
                     } else if let t = module as? DictationTranscriber {
-                        for try await r in t.results { cont.yield((String(r.text.characters), r.isFinal)) }
+                        for try await r in t.results {
+                            if ProcessInfo.processInfo.environment["SPEAK_DEBUG"] != nil {
+                                FileHandle.standardError.write("  [\(r.isFinal ? "F" : "v") \(String(format: "%.2f", r.range.start.seconds))+\(String(format: "%.2f", r.range.duration.seconds))] \(String(r.text.characters))\n".data(using: .utf8)!)
+                            }
+                            cont.yield((String(r.text.characters), r.isFinal))
+                        }
                     }
                     cont.finish()
                 } catch { cont.finish(throwing: error) }
