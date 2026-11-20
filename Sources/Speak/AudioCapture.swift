@@ -36,6 +36,7 @@ final class AudioCapture {
             throw NSError(domain: "Speak", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input available."])
         }
         converter = inFormat != target ? AVAudioConverter(from: inFormat, to: target) : nil
+        Log.write("audio: input \(inFormat) -> \(target), converter=\(converter != nil)")
         let ratio = target.sampleRate / inFormat.sampleRate
 
         // ~20 ms at 48 kHz: low latency without excess wakeups.

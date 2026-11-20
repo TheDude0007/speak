@@ -66,7 +66,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func dispatch(_ f: (inout HotkeyMachine) -> [HotkeyMachine.Action]) {
-        for action in f(&machine) {
+        let actions = f(&machine)
+        if !actions.isEmpty { Log.write("gesture -> \(actions) state=\(machine.state)") }
+        for action in actions {
             switch action {
             case .start: beginDictation()
             case .commit: commitDictation()
@@ -88,6 +90,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func beginDictation() {
         guard session == nil else { return }
         guard let s = engine.makeSession(vocabulary: store.dictionary().vocabulary) else {
+            Log.write("begin: engine not ready (\(engineStatus))")
             machine.reset()
             hud.flash(engineStatus)
             return
@@ -98,12 +101,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try audio.start(target: s.format)
             audio.attach { [weak s] buf in s?.feed(buf) }
         } catch {
+            Log.write("begin: mic error \(error)")
             s.cancel()
             machine.reset()
             hud.flash("Mic error: \(error.localizedDescription)")
             return
         }
         session = s
+        Log.write("begin: recording (engine=\(engine.engineName), aiPunctuation=\(engine.aiPunctuation))")
         setIcon(recording: true)
         hud.show(.listening)
         if store.sounds { play("Tink") }
@@ -119,8 +124,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let app = NSWorkspace.shared.frontmostApplication?.localizedName
         Task { @MainActor in
             let raw = await s.finish()
+            Log.write("raw: \(raw.debugDescription)")
             let cleaned = TextCleaner(options: store.cleanerOptions()).clean(raw)
-            guard !cleaned.isEmpty else { hud.hide(); return }
+            guard !cleaned.isEmpty else { Log.write("nothing to insert (empty after cleanup)"); hud.hide(); return }
             var polished = cleaned
             var polishedByClaude = false
             if store.aiPolish {
@@ -135,7 +141,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             var out = polished
             if store.smartSpacing { out = SmartJoin.adapt(cleaned, after: Inserter.textBeforeCaret()) }
-            Inserter.insert(out)
+            let method = Inserter.insert(out)
+            Log.write("inserted via \(method.rawValue) into \(app ?? "?"): \(out.debugDescription)")
             let ms = Int((CACurrentMediaTime() - t0) * 1000)
             lastLatencyMs = ms
             store.add(.init(date: Date(), text: polished, raw: raw, latencyMs: ms, app: app))
@@ -389,6 +396,53 @@ func runHeadless(_ path: String, realtime: Bool) async {
     }
 }
 
+/// Live-mic self-test (run via `open -a Speak --args --mic-test 6` so the mic grant applies):
+/// records through the real AudioCapture path, logs frames + results, saves the audio.
+func runMicTest(seconds: Double) async {
+    let engine = SpeechEngine()
+    let ai = ProcessInfo.processInfo.environment["SPEAK_ENGINE"] == nil ? SmartGrammar.shared.isAvailable : false
+    await engine.prepare(aiPunctuation: ai)
+    guard let s = engine.makeSession(vocabulary: []) else { Log.write("mic-test: engine not ready"); exit(1) }
+    let audio = AudioCapture()
+    var frames: AVAudioFrameCount = 0
+    var buffers = 0
+    let wavURL = Log.url.deletingLastPathComponent().appendingPathComponent("Speak-mictest.wav")
+    var file = try? AVAudioFile(forWriting: wavURL, settings: s.format.settings, commonFormat: s.format.commonFormat, interleaved: s.format.isInterleaved)
+    s.onPartial = { Log.write("mic-test partial: \($0.debugDescription)") }
+    do { try audio.start(target: s.format) } catch { Log.write("mic-test: mic error \(error)"); exit(1) }
+    audio.attach { buf in
+        frames += buf.frameLength; buffers += 1
+        try? file?.write(from: buf)
+        s.feed(buf)
+    }
+    var levels: [Float] = []
+    audio.onLevel = { levels.append($0) }
+    Log.write("mic-test: recording \(seconds)s engine=\(engine.engineName) format=\(s.format)")
+    try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9))
+    audio.stop()
+    let raw = await s.finish()
+    Log.write("mic-test: raw mic level max=\(levels.max() ?? -1) mean=\(levels.isEmpty ? -1 : levels.reduce(0,+)/Float(levels.count)) (0 = silence)")
+    file = nil
+    Log.write("mic-test: fed \(buffers) buffers, \(frames) frames (\(Double(frames) / s.format.sampleRate)s)")
+    Log.write("mic-test RAW: \(raw.debugDescription)")
+    exit(0)
+}
+
+if let i = CommandLine.arguments.firstIndex(of: "--mic-test") {
+    let secs = Double(CommandLine.arguments.dropFirst(i + 1).first ?? "6") ?? 6
+    Task { await runMicTest(seconds: secs) }
+    dispatchMain()
+}
+
+if CommandLine.arguments.contains("--diag") {
+    print("accessibility trusted:", AXIsProcessTrusted())
+    print("input monitoring (listen events):", CGPreflightListenEventAccess())
+    print("post events:", CGPreflightPostEventAccess())
+    print("apple intelligence:", SmartGrammar.shared.unavailableReason ?? "available")
+    let t = HotkeyTap(); print("event tap created:", t.start()); t.stop()
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--cmdv-keycode") {
     print("Cmd+V key code for current layout: \(Inserter.commandVKeyCode())")
     exit(0)
@@ -399,6 +453,13 @@ if let i = CommandLine.arguments.firstIndex(of: "--transcribe"), i + 1 < Command
     let rt = CommandLine.arguments.contains("--realtime")
     Task { await runHeadless(path, realtime: rt) }
     dispatchMain()
+}
+
+// One Speak at a time: a second copy would type every dictation twice.
+if let id = Bundle.main.bundleIdentifier,
+   NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+    Log.write("another Speak is already running; exiting")
+    exit(0)
 }
 
 let app = NSApplication.shared

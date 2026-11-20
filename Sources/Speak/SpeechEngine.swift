@@ -17,6 +17,7 @@ final class SpeechEngine {
 
     private func set(_ s: State) {
         state = s
+        Log.write("engine: \(s)")
         DispatchQueue.main.async { self.onStateChange?(s) }
     }
 

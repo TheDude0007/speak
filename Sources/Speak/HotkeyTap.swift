@@ -48,6 +48,7 @@ final class HotkeyTap {
         stop()
         let mask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
         let ref = Unmanaged.passUnretained(self).toOpaque()
+        Log.write("event tap: starting (key=\(key.rawValue), AX=\(AXIsProcessTrusted()), listen=\(CGPreflightListenEventAccess()))")
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap,
                                           place: .headInsertEventTap,
                                           options: .listenOnly,
@@ -73,6 +74,7 @@ final class HotkeyTap {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
         case .flagsChanged:
             let code = event.getIntegerValueField(.keyboardEventKeycode)
+            Log.write("flagsChanged keycode=\(code) flags=0x\(String(event.flags.rawValue, radix: 16)) watching=\(key.rawValue)")
             guard key.keyCodes.contains(code) else {
                 // A different modifier changed while ours is held = chord, not dictation.
                 if isDown, code != 63 { onOtherKey?() }
@@ -83,7 +85,7 @@ final class HotkeyTap {
             else if !down && isDown { isDown = false; onUp?() }
         case .keyDown:
             if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return }
-            if event.getIntegerValueField(.keyboardEventKeycode) == 53 { onEscape?() } else { onOtherKey?() }
+            if event.getIntegerValueField(.keyboardEventKeycode) == 53 { onEscape?() } else { if isDown { Log.write("other key while holding") }; onOtherKey?() }
         default:
             break
         }

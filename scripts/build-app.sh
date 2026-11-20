@@ -37,4 +37,5 @@ if [[ "${1:-}" != "--no-install" ]]; then
   rm -rf ~/Applications/Speak.app
   cp -R "$APP" ~/Applications/Speak.app
   echo "Installed: ~/Applications/Speak.app"
+  rm -rf "$APP"   # leave only one copy on disk so macOS never launches a stray one
 fi

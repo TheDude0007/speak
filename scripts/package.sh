@@ -43,5 +43,6 @@ TXT
 OUT=build/Speak-${VERSION}.zip
 rm -f "$OUT"
 ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$OUT"
+rm -rf build/share   # zip only; no loose copy of the app left behind
 echo "Signed with: ${IDENTITY:-ad-hoc}"
 ls -lh "$OUT"
