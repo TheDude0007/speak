@@ -28,6 +28,8 @@ final class Store {
     var sounds: Bool { get { bool("sounds", default: true) } set { d.set(newValue, forKey: "sounds") } }
     var liveText: Bool { get { bool("liveText", default: true) } set { d.set(newValue, forKey: "liveText") } }
     var keepHistory: Bool { get { bool("keepHistory", default: true) } set { d.set(newValue, forKey: "keepHistory") } }
+    var aiPolish: Bool { get { bool("aiPolish", default: false) } set { d.set(newValue, forKey: "aiPolish") } }
+    var instantStart: Bool { get { bool("instantStart", default: false) } set { d.set(newValue, forKey: "instantStart") } }
 
     // MARK: dictionary
     struct Dictionary: Codable {

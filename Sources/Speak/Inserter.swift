@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 
 /// Puts text at the caret of whatever app is focused.
 ///
@@ -140,9 +141,33 @@ enum Inserter {
         }
     }
 
+    /// Key code that produces "v" *with Command held* in the current layout.
+    /// Handles Dvorak, AZERTY, Colemak and "Dvorak – QWERTY ⌘" (which swaps to QWERTY under ⌘).
+    static func commandVKeyCode() -> CGKeyCode {
+        guard let src = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let ptr = TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData) else { return 9 }
+        let data = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue() as Data
+        let target = UniChar(("v" as Unicode.Scalar).value)
+        let cmdState = UInt32((cmdKey >> 8) & 0xFF)
+        return data.withUnsafeBytes { raw -> CGKeyCode in
+            guard let base = raw.baseAddress else { return 9 }
+            let layout = base.assumingMemoryBound(to: UCKeyboardLayout.self)
+            var chars = [UniChar](repeating: 0, count: 4)
+            for code in 0..<128 {
+                var dead: UInt32 = 0
+                var len = 0
+                let st = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), cmdState,
+                                        UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                        &dead, 4, &len, &chars)
+                if st == noErr, len == 1, chars[0] == target || chars[0] == target - 32 { return CGKeyCode(code) }
+            }
+            return 9
+        }
+    }
+
     private static func sendCmdV() {
         let src = CGEventSource(stateID: .privateState) // independent of keys the user is still holding
-        let vKey: CGKeyCode = 9
+        let vKey = commandVKeyCode()
         let down = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: true)
         let up = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: false)
         down?.flags = .maskCommand

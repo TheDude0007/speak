@@ -1,5 +1,5 @@
 import AppKit
-import AVFoundation
+@preconcurrency import AVFoundation
 import Speech
 import ServiceManagement
 import SpeakCore
@@ -31,7 +31,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch s {
             case .idle: self.engineStatus = "Idle"
             case .preparing(let m): self.engineStatus = m
-            case .ready: self.engineStatus = "Ready — on-device (\(self.engine.locale.identifier))"
+            case .ready: self.engineStatus = "Ready — on-device (\(self.engine.locale.identifier))"; self.armInstantStart()
             case .failed(let m): self.engineStatus = "Speech error: \(m)"; self.hud.flash(m, seconds: 5)
             }
         }
@@ -93,10 +93,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         s.onPartial = { [weak self] text in self?.hud.pushText(text) }
-        audio.onBuffer = { [weak s] buf in s?.feed(buf) }
         audio.onLevel = { [weak self] v in self?.hud.pushLevel(v) }
         do {
             try audio.start(target: s.format)
+            audio.attach { [weak s] buf in s?.feed(buf) }
         } catch {
             s.cancel()
             machine.reset()
@@ -112,7 +112,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func commitDictation() {
         guard let s = session else { return }
         session = nil
-        audio.stop()
+        releaseMic()
         setIcon(recording: false)
         hud.show(.finishing, text: hud.model.text)
         let t0 = CACurrentMediaTime()
@@ -121,12 +121,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let raw = await s.finish()
             let cleaned = TextCleaner(options: store.cleanerOptions()).clean(raw)
             guard !cleaned.isEmpty else { hud.hide(); return }
-            var out = cleaned
+            var polished = cleaned
+            if store.aiPolish {
+                hud.show(.finishing, text: "Polishing…")
+                do { polished = try await Polisher.polish(cleaned, appName: app) }
+                catch { hud.pushText("AI polish skipped — using local text") }
+            }
+            var out = polished
             if store.smartSpacing { out = SmartJoin.adapt(cleaned, after: Inserter.textBeforeCaret()) }
             Inserter.insert(out)
             let ms = Int((CACurrentMediaTime() - t0) * 1000)
             lastLatencyMs = ms
-            store.add(.init(date: Date(), text: cleaned, raw: raw, latencyMs: ms, app: app))
+            store.add(.init(date: Date(), text: polished, raw: raw, latencyMs: ms, app: app))
             hud.hide(after: 0.05)
         }
     }
@@ -135,10 +141,27 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         tapTimer?.cancel()
         guard let s = session else { return }
         session = nil
-        audio.stop()
+        releaseMic()
         s.cancel()
         setIcon(recording: false)
         hud.hide()
+    }
+
+    // MARK: mic modes
+
+    private func releaseMic() {
+        if store.instantStart { audio.detach() } else { audio.stop() }
+    }
+
+    /// Instant start: keep the mic open with a 0.5 s rolling pre-roll so the first
+    /// syllable is never clipped, even if you start talking as you press the key.
+    private func armInstantStart() {
+        audio.keepPreroll = store.instantStart
+        guard store.instantStart, session == nil, let fmt = engine.analyzerFormat else {
+            if !store.instantStart, session == nil { audio.stop() }
+            return
+        }
+        do { try audio.start(target: fmt) } catch { hud.flash("Mic error: \(error.localizedDescription)") }
     }
 
     // MARK: UI helpers
@@ -196,6 +219,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Keep history", #selector(toggle(_:)), state: store.keepHistory, obj: "keepHistory"))
         menu.addItem(item("Edit dictionary & replacements…", #selector(openDictionary)))
         menu.addItem(.separator())
+        menu.addItem(item("Instant start (mic stays ready)", #selector(toggle(_:)), state: store.instantStart, obj: "instantStart"))
+        menu.addItem(item("AI polish with Claude (sends text, not audio)", #selector(toggle(_:)), state: store.aiPolish, obj: "aiPolish"))
+        menu.addItem(item(Keychain.apiKey == nil ? "Set Claude API key…" : "Change Claude API key…", #selector(setAPIKey)))
+        menu.addItem(.separator())
 
         let hist = NSMenu()
         if store.history.isEmpty {
@@ -225,9 +252,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggle(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        let v = !store.bool(key, default: true)
+        let v = !store.bool(key, default: !["aiPolish", "instantStart"].contains(key))
         UserDefaults.standard.set(v, forKey: key)
         if key == "liveText" { hud.model.showText = v }
+        if key == "instantStart" { armInstantStart() }
+        if key == "aiPolish", v, Keychain.apiKey == nil { setAPIKey() }
     }
 
     @objc private func fixGlobeKey() {
@@ -262,6 +291,24 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func clearHistory() { store.clearHistory() }
+
+    @objc private func setAPIKey() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Claude API key"
+        alert.informativeText = "Used only for the optional AI polish. Stored in your macOS Keychain. Leave blank to remove."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = "sk-ant-…"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        Keychain.apiKey = key.isEmpty ? nil : key
+        if key.isEmpty { store.aiPolish = false }
+        hud.flash(key.isEmpty ? "API key removed" : "API key saved to Keychain")
+    }
 
     @objc private func toggleLogin() {
         do {
@@ -312,6 +359,11 @@ func runHeadless(_ path: String, realtime: Bool) async {
     } catch {
         print("error: \(error)"); exit(1)
     }
+}
+
+if CommandLine.arguments.contains("--cmdv-keycode") {
+    print("Cmd+V key code for current layout: \(Inserter.commandVKeyCode())")
+    exit(0)
 }
 
 if let i = CommandLine.arguments.firstIndex(of: "--transcribe"), i + 1 < CommandLine.arguments.count {

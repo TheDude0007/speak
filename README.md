@@ -21,6 +21,12 @@ Fillers (um, uh, er, hmm) are removed. Custom words + replacements live in
   "replacements": { "gemini sound": "GEMNIsound" } } // spoken phrase -> exact output
 ```
 
+## Options (menu bar)
+
+- **Instant start**: keeps the mic open with a rolling 0.5 s memory buffer, so a word you start as you press the key isn't clipped. Nothing is saved or sent while idle, but the orange mic indicator stays on. Off by default.
+- **AI polish with Claude**: after local cleanup, sends the *text only* to `claude-opus-5-5` (low effort) to fix grammar and false starts. The key lives in your Keychain. On any error, timeout (6 s) or refusal it silently falls back to the local text. Off by default; this is the only feature that sends anything off the Mac.
+- Paste uses the Command+V key for your **current keyboard layout** (Dvorak, AZERTY, "Dvorak – QWERTY ⌘" and others).
+
 ## Build
 
 ```sh
