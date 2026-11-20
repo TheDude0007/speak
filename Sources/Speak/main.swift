@@ -140,7 +140,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 polished += "."   // dictation engine leaves the final sentence open
             }
             var out = polished
-            if store.smartSpacing { out = SmartJoin.adapt(cleaned, after: Inserter.textBeforeCaret()) }
+            if store.smartSpacing { out = SmartJoin.adapt(polished, after: Inserter.textBeforeCaret()) }
+            Log.write("grammar: \(polished == cleaned ? "unchanged" : "fixed") -> \(polished.debugDescription)")
             let method = Inserter.insert(out)
             Log.write("inserted via \(method.rawValue) into \(app ?? "?"): \(out.debugDescription)")
             let ms = Int((CACurrentMediaTime() - t0) * 1000)
