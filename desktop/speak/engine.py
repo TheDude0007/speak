@@ -95,7 +95,7 @@ class Engine:
             joiner=str(d / "joiner.int8.onnx"),
             tokens=str(d / "tokens.txt"),
             model_type="nemo_transducer",
-            num_threads=threads or max(1, min(4, (os.cpu_count() or 2) // 2)),
+            num_threads=threads or max(1, min(4, (os.cpu_count() or 2) - 1)),
         )
         self._lock = threading.Lock()
         # Warm-up: first inference allocates arenas; do it now, not on the user's first dictation.

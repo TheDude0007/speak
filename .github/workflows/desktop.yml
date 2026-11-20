@@ -16,6 +16,7 @@ jobs:
           - os: ubuntu-22.04
             artifact: Speak-linux-x64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: desktop
@@ -30,12 +31,12 @@ jobs:
 
       - name: Linux system packages
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xclip
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xclip xvfb
 
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller==6.11.1
+          pip install -r requirements.txt pyinstaller==6.16.0
 
       - name: Unit tests (shared logic, same cases as the Swift tests)
         run: python -m unittest discover -s tests -t .
@@ -50,21 +51,30 @@ jobs:
         run: python -m speak --download-models
 
       - name: Speech self-test (real audio, real model, this OS)
+        timeout-minutes: 10
         run: |
           python -m speak --transcribe tests/fixtures/pauses.wav --realtime
           python -m speak --transcribe tests/fixtures/sample.wav
 
       - name: Build app (PyInstaller)
+        timeout-minutes: 15
         shell: bash
         run: |
-          SEP=":"; [ "$RUNNER_OS" = "Windows" ] && SEP=";"
-          pyinstaller --noconfirm --clean --name Speak --windowed \
-            --collect-all sherpa_onnx --collect-submodules pystray --collect-submodules pynput \
-            --collect-submodules keyring --hidden-import PIL._tkinter_finder \
-            --icon assets/speak.ico \
-            speak_entry.py
+          COMMON="--noconfirm --clean --name Speak --windowed --icon assets/speak.ico \
+            --collect-all sherpa_onnx --collect-all numpy --collect-submodules keyring \
+            --hidden-import PIL._tkinter_finder"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pyinstaller $COMMON --hidden-import pystray._win32 \
+              --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 speak_entry.py
+          else
+            # pystray/pynput need an X display at import time; give the build a virtual one.
+            xvfb-run -a pyinstaller $COMMON --hidden-import pystray._xorg --hidden-import pystray._appindicator \
+              --hidden-import pynput.keyboard._xorg --hidden-import pynput.mouse._xorg \
+              --hidden-import pynput.keyboard._uinput speak_entry.py
+          fi
 
       - name: Self-test the packaged app
+        timeout-minutes: 10
         shell: bash
         run: |
           EXE=dist/Speak/Speak; [ "$RUNNER_OS" = "Windows" ] && EXE=dist/Speak/Speak.exe
