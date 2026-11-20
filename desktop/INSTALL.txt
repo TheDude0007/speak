@@ -1,0 +1,29 @@
+Speak — hold a key, talk, let go. Your words are typed wherever your cursor is.
+Runs on your computer: your voice never leaves it. (First launch downloads the
+speech models once, about 520 MB.)
+
+WINDOWS
+1. Unzip, and move the Speak folder somewhere permanent (e.g. Documents).
+2. Double-click Speak.exe. If Windows SmartScreen appears: More info -> Run anyway.
+3. A waveform icon appears in the system tray (bottom right; check the ^ arrow).
+   Wait until hovering it says "Ready".
+4. Click into any text box, HOLD Right Ctrl, talk, let go.
+
+LINUX
+1. Extract:  tar xzf Speak-linux-x64.tar.gz
+2. Needs:    sudo apt install libportaudio2 xclip      (Debian/Ubuntu)
+3. Run:      ./Speak/Speak
+4. Hold Right Ctrl, talk, let go.
+   Wayland (default on Ubuntu/Fedora): apps can't watch keys globally there.
+   Add a keyboard shortcut in Settings > Keyboard that runs
+       /path/to/Speak/Speak --toggle
+   Press it once to start, again to finish. Install `wtype` (or `ydotool`) so
+   Speak can paste for you.
+
+USING IT
+- Hold the key = talk while held.   Double-tap = hands-free; tap again to finish.
+- Esc cancels.  Say "new line", "new paragraph", or "scratch that".
+- Pause to think as long as you like: punctuation comes from what you said,
+  not from your pauses.
+- Tray icon menu: change key, sounds, filler removal, replacements, recent text,
+  optional AI polish with Claude (sends text only; needs your API key).

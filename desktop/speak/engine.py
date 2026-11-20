@@ -15,7 +15,13 @@ from pathlib import Path
 import numpy as np
 
 MODEL_NAME = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
-MODEL_URL = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{MODEL_NAME}.tar.bz2"
+PUNCT_MODEL_NAME = "sherpa-onnx-online-punct-en-2024-08-06"
+MODELS = {
+    MODEL_NAME: (f"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{MODEL_NAME}.tar.bz2",
+                 ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]),
+    PUNCT_MODEL_NAME: (f"https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/{PUNCT_MODEL_NAME}.tar.bz2",
+                       ["model.int8.onnx", "bpe.vocab"]),
+}
 SAMPLE_RATE = 16000
 
 
@@ -31,40 +37,51 @@ def data_dir() -> Path:
     return d
 
 
+def model_dir_for(name: str) -> Path:
+    """SPEAK_MODELS_DIR overrides where models live (CI caches, portable installs)."""
+    root = os.environ.get("SPEAK_MODELS_DIR")
+    return (Path(root) if root else data_dir()) / name
+
+
 def model_dir() -> Path:
-    override = os.environ.get("SPEAK_MODEL_DIR")
-    return Path(override) if override else data_dir() / MODEL_NAME
+    return model_dir_for(MODEL_NAME)
 
 
-def model_present() -> bool:
-    d = model_dir()
-    return all((d / f).exists() for f in ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"))
+def model_present(name: str = MODEL_NAME) -> bool:
+    d = model_dir_for(name)
+    return all((d / f).exists() for f in MODELS[name][1])
 
 
-def download_model(progress=lambda frac, msg: None) -> None:
-    """Stream-download and extract the model (~490 MB) into the data dir."""
-    if model_present():
-        return
-    dest = data_dir()
-    tmp = dest / (MODEL_NAME + ".tar.bz2.part")
-    with urllib.request.urlopen(MODEL_URL) as r, open(tmp, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0)
-        done = 0
-        while chunk := r.read(1 << 20):
-            f.write(chunk)
-            done += len(chunk)
-            if total:
-                progress(done / total * 0.9, f"Downloading speech model… {done >> 20} / {total >> 20} MB")
-    progress(0.92, "Unpacking speech model…")
-    staging = dest / (MODEL_NAME + ".staging")
-    shutil.rmtree(staging, ignore_errors=True)
-    with tarfile.open(tmp, "r:bz2") as t:
-        t.extractall(staging, filter="data")
-    shutil.rmtree(model_dir(), ignore_errors=True)
-    (staging / MODEL_NAME).rename(model_dir())
-    shutil.rmtree(staging, ignore_errors=True)
-    tmp.unlink(missing_ok=True)
-    progress(1.0, "Speech model ready")
+def models_present() -> bool:
+    return all(model_present(n) for n in MODELS)
+
+
+def download_models(progress=lambda frac, msg: None) -> None:
+    """Stream-download + extract any missing model (~520 MB total, once)."""
+    for name, (url, _files) in MODELS.items():
+        if model_present(name):
+            continue
+        dest = model_dir_for(name).parent
+        dest.mkdir(parents=True, exist_ok=True)
+        tmp = dest / (name + ".tar.bz2.part")
+        with urllib.request.urlopen(url) as r, open(tmp, "wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
+            while chunk := r.read(1 << 20):
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    progress(done / total * 0.95, f"Downloading {name.split('-')[3]} model… {done >> 20} / {total >> 20} MB")
+        progress(0.96, "Unpacking…")
+        staging = dest / (name + ".staging")
+        shutil.rmtree(staging, ignore_errors=True)
+        with tarfile.open(tmp, "r:bz2") as t:
+            t.extractall(staging, filter="data")
+        shutil.rmtree(model_dir_for(name), ignore_errors=True)
+        (staging / name).rename(model_dir_for(name))
+        shutil.rmtree(staging, ignore_errors=True)
+        tmp.unlink(missing_ok=True)
+    progress(1.0, "Models ready")
 
 
 class Engine:
@@ -95,11 +112,12 @@ class Engine:
 
 
 class ProgressiveTranscriber:
-    """Decodes finished phrases *while you are still talking*, split at natural
-    pauses, so on key-up only the last phrase is left to decode. Keeps latency
-    flat no matter how long you dictate."""
+    """Short dictation is decoded in one pass on key-up (best context, ~0.2–0.4 s).
+    Long hands-free dictation is decoded in ~20 s chunks *while you talk*, cut at a
+    pause, so key-up latency stays flat. Chunk-boundary periods are harmless:
+    punctuation is re-derived from meaning afterwards (punct.py)."""
 
-    def __init__(self, engine: Engine, pause_s: float = 0.5, min_phrase_s: float = 2.0):
+    def __init__(self, engine: Engine, pause_s: float = 0.4, min_phrase_s: float = 20.0):
         self.engine = engine
         self.pause = int(pause_s * SAMPLE_RATE)
         self.min_phrase = int(min_phrase_s * SAMPLE_RATE)
@@ -174,13 +192,14 @@ def read_wav(path: str) -> np.ndarray:
 
 
 def selftest(wav: str, realtime: bool = True) -> int:
-    from .core import TextCleaner
+    from .pipeline import Pipeline
 
     t0 = time.perf_counter()
-    if not model_present():
-        download_model(lambda f, m: print(f"\r{m}", end="", flush=True))
+    if not models_present():
+        download_models(lambda f, m: print(f"\r{m}            ", end="", flush=True))
         print()
     eng = Engine()
+    pipe = Pipeline()
     t1 = time.perf_counter()
     x = read_wav(wav)
     pt = ProgressiveTranscriber(eng)
@@ -194,6 +213,13 @@ def selftest(wav: str, realtime: bool = True) -> int:
     t3 = time.perf_counter()
     print(f"platform: {sys.platform}  audio: {x.size / SAMPLE_RATE:.1f}s")
     print(f"model load + warm-up: {int((t1 - t0) * 1000)} ms   key-up -> text: {int((t3 - t2) * 1000)} ms")
-    print("RAW:    ", raw)
-    print("CLEANED:", TextCleaner().clean(raw))
-    return 0 if raw else 1
+    t4 = time.perf_counter()
+    final = pipe.finish(raw, polish=False)
+    t5 = time.perf_counter()
+    print(f"punctuation + cleanup: {int((t5 - t4) * 1000)} ms")
+    print("RAW:  ", raw)
+    print("FINAL:", final)
+    out = os.environ.get("SPEAK_SELFTEST_OUT")  # windowed builds have no console
+    if out:
+        Path(out).write_text(f"key_up_ms={int((t3 - t2) * 1000)}\nRAW: {raw}\nFINAL: {final}\n", encoding="utf-8")
+    return 0 if final else 1
